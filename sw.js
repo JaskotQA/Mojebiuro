@@ -1,35 +1,12 @@
-const CACHE = 'mojebiuro-v2';
-const ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.png',
-];
-
-self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(CACHE).then(cache => cache.addAll(ASSETS).catch(() => {}))
-  );
-  self.skipWaiting();
-});
-
+// sw.js — no cache, always fresh
+self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    )
+    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))))
   );
   self.clients.claim();
 });
-
 self.addEventListener('fetch', e => {
-  // Never intercept Firebase or Google API requests
-  if (e.request.url.includes('firestore.googleapis.com') ||
-      e.request.url.includes('firebase') ||
-      e.request.url.includes('gstatic.com/firebasejs')) {
-    return;
-  }
-  e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).catch(() => caches.match('/index.html')))
-  );
+  if (e.request.url.includes('firestore') || e.request.url.includes('firebase')) return;
+  e.respondWith(fetch(e.request).catch(() => new Response('Offline')));
 });
