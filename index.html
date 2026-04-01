@@ -639,10 +639,500 @@ body {
   </div>
 </div>
 
-<script type="module">
-// ── FIREBASE ──
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+<!-- Firebase CDN (compat - działa bez type=module) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<script>
+// ── FIREBASE INIT ──
+firebase.initializeApp({
+  apiKey: "AIzaSyDKKWWTDHMTDBedPur2KEkEVm6Xwm-7hoA",
+  authDomain: "mojeb-3f684.firebaseapp.com",
+  projectId: "mojeb-3f684",
+  storageBucket: "mojeb-3f684.firebasestorage.app",
+  messagingSenderId: "653841951956",
+  appId: "1:653841951956:web:585e0518231e042a491f41"
+});
+const db  = firebase.firestore();
+const DOC = db.collection('biuro').doc('dane');
+
+// ── STATE ──
+let D = { clients: [], viewings: [], commissions: [], goal: 0 };
+let _saving = false;
+
+async function save() {
+  try {
+    _saving = true;
+    await DOC.set(D);
+  } catch(e) {
+    localStorage.setItem('agentka_v1', JSON.stringify(D));
+    console.warn('Firebase save failed', e);
+  } finally {
+    _saving = false;
+  }
+}
+
+function showSync(state) {
+  const el = document.getElementById('syncDot');
+  if (!el) return;
+  el.style.background = state === 'ok' ? '#1A8A4A' : state === 'saving' ? '#D4600A' : '#C0392B';
+  el.title = state === 'ok' ? '✓ Zsynchronizowano' : state === 'saving' ? 'Zapisywanie…' : 'Błąd połączenia';
+}
+
+function startSync() {
+  showSync('saving');
+  DOC.onSnapshot(snap => {
+    if (snap.exists) {
+      if (!_saving) {
+        D = { clients: [], viewings: [], commissions: [], goal: 0, ...snap.data() };
+        renderAll();
+      }
+    } else {
+      save();
+    }
+    showSync('ok');
+  }, err => {
+    console.warn('Firestore error', err);
+    showSync('error');
+    const local = localStorage.getItem('agentka_v1');
+    if (local) { D = JSON.parse(local); renderAll(); }
+  });
+}
+
+// ── HELPERS ──
+const uid  = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const fmt  = n => Math.round(n).toLocaleString('pl-PL');
+const now  = new Date();
+
+const MONTHS_PL   = ['Styczeń','Luty','Marzec','Kwiecień','Maj','Czerwiec','Lipiec','Sierpień','Wrzesień','Październik','Listopad','Grudzień'];
+const SHORT_MONTHS = ['Sty','Lut','Mar','Kwi','Maj','Cze','Lip','Sie','Wrz','Paź','Lis','Gru'];
+const DAYS_PL     = ['Niedz.','Pon.','Wt.','Śr.','Czw.','Pt.','Sob.'];
+
+let clientFilter  = 'all';
+let viewingMonth  = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+let financeMonth  = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+let editClientId  = null, editViewingId = null, editCommissionId = null;
+
+function setTopDate() {
+  const d = new Date();
+  document.getElementById('topDate').textContent = DAYS_PL[d.getDay()] + ', ' + d.getDate() + ' ' + MONTHS_PL[d.getMonth()];
+}
+
+// ── NAV ──
+function goPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  document.querySelector(`[data-page="${name}"]`).classList.add('active');
+  if (name === 'viewings') renderViewingMonths();
+  if (name === 'finance')  renderFinanceMonths();
+}
+
+// ── CHIPS ──
+function selChip(el, groupId) {
+  document.querySelectorAll('#'+groupId+' .chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+}
+function getChip(groupId) {
+  const el = document.querySelector('#'+groupId+' .chip.active');
+  return el ? el.textContent.replace(/^[^\w\s]+\s*/,'').trim() : '';
+}
+function setActiveChipText(groupId, text) {
+  document.querySelectorAll('#'+groupId+' .chip').forEach(c => {
+    c.classList.toggle('active', c.textContent.replace(/^[^\w\s]+\s*/,'').trim() === text);
+  });
+}
+function resetChips(groupId) {
+  const chips = document.querySelectorAll('#'+groupId+' .chip');
+  chips.forEach((c,i) => c.classList.toggle('active', i===0));
+}
+
+// ── MODAL ──
+function openModal(type, id) {
+  id = id || null;
+  if (type === 'client') {
+    editClientId = id;
+    document.getElementById('clientModalTitle').textContent = id ? 'Edytuj klienta' : 'Nowy klient';
+    document.getElementById('cDelBtn').style.display = id ? 'block' : 'none';
+    if (id) {
+      const c = D.clients.find(x => x.id === id);
+      document.getElementById('cName').value   = c.name;
+      document.getElementById('cPhone').value  = c.phone || '';
+      document.getElementById('cEmail').value  = c.email || '';
+      document.getElementById('cBudget').value = c.budget || '';
+      document.getElementById('cNote').value   = c.note || '';
+      setActiveChipText('cTypeChips', c.type);
+      setActiveChipText('cStatusChips', c.status);
+    } else {
+      ['cName','cPhone','cEmail','cBudget','cNote'].forEach(function(i){ document.getElementById(i).value=''; });
+      resetChips('cTypeChips'); resetChips('cStatusChips');
+    }
+    document.getElementById('clientModal').classList.add('open');
+  }
+  if (type === 'viewing') {
+    editViewingId = id;
+    document.getElementById('viewingModalTitle').textContent = id ? 'Edytuj oglądanie' : 'Nowe oglądanie';
+    document.getElementById('vDelBtn').style.display = id ? 'block' : 'none';
+    const sel = document.getElementById('vClient');
+    sel.innerHTML = '<option value="">— wybierz klienta —</option>' +
+      D.clients.map(function(c){ return '<option value="'+c.id+'">'+c.name+'</option>'; }).join('');
+    if (id) {
+      const v = D.viewings.find(x => x.id === id);
+      document.getElementById('vDate').value = v.date;
+      document.getElementById('vTime').value = v.time;
+      document.getElementById('vAddr').value = v.addr;
+      document.getElementById('vRent').value = v.rent || '';
+      document.getElementById('vNote').value = v.note || '';
+      sel.value = v.clientId || '';
+      setActiveChipText('vStatusChips', v.status);
+    } else {
+      document.getElementById('vDate').value = new Date().toISOString().slice(0,10);
+      document.getElementById('vTime').value = '10:00';
+      ['vAddr','vRent','vNote'].forEach(function(i){ document.getElementById(i).value=''; });
+      sel.value = ''; resetChips('vStatusChips');
+    }
+    document.getElementById('viewingModal').classList.add('open');
+  }
+  if (type === 'commission') {
+    editCommissionId = id;
+    document.getElementById('commModalTitle').textContent = id ? 'Edytuj prowizję' : 'Nowa prowizja';
+    document.getElementById('commDelBtn').style.display = id ? 'block' : 'none';
+    if (id) {
+      const c = D.commissions.find(x => x.id === id);
+      document.getElementById('commDesc').value = c.desc;
+      document.getElementById('commAmt').value  = c.amount;
+      document.getElementById('commDate').value = c.date;
+      document.getElementById('commNote').value = c.note || '';
+      setActiveChipText('commStatusChips', c.status);
+    } else {
+      document.getElementById('commDate').value = new Date().toISOString().slice(0,10);
+      ['commDesc','commAmt','commNote'].forEach(function(i){ document.getElementById(i).value=''; });
+      resetChips('commStatusChips');
+    }
+    document.getElementById('commissionModal').classList.add('open');
+  }
+}
+
+function closeModal(type) {
+  document.getElementById(type+'Modal').classList.remove('open');
+  if (type==='client') editClientId=null;
+  if (type==='viewing') editViewingId=null;
+  if (type==='commission') editCommissionId=null;
+}
+
+// ── SAVE CLIENT ──
+function saveClient() {
+  const name = document.getElementById('cName').value.trim();
+  if (!name) { flash('cName'); return; }
+  const obj = {
+    id: editClientId || uid(), name,
+    phone:  document.getElementById('cPhone').value.trim(),
+    email:  document.getElementById('cEmail').value.trim(),
+    type:   getChip('cTypeChips'),
+    status: getChip('cStatusChips'),
+    budget: parseFloat(document.getElementById('cBudget').value) || 0,
+    note:   document.getElementById('cNote').value.trim(),
+    createdAt: editClientId ? (D.clients.find(c=>c.id===editClientId)||{}).createdAt : Date.now()
+  };
+  if (editClientId) D.clients = D.clients.map(c => c.id===editClientId ? obj : c);
+  else D.clients.unshift(obj);
+  save(); renderAll(); closeModal('client');
+}
+function deleteClient() {
+  if (!confirm('Usunąć klienta?')) return;
+  D.clients = D.clients.filter(c => c.id !== editClientId);
+  save(); renderAll(); closeModal('client');
+}
+
+// ── SAVE VIEWING ──
+function saveViewing() {
+  const addr = document.getElementById('vAddr').value.trim();
+  const date = document.getElementById('vDate').value;
+  if (!addr || !date) { flash(addr?'vDate':'vAddr'); return; }
+  const obj = {
+    id: editViewingId || uid(), date, time: document.getElementById('vTime').value,
+    addr, clientId: document.getElementById('vClient').value,
+    rent:   parseFloat(document.getElementById('vRent').value) || 0,
+    status: getChip('vStatusChips'),
+    note:   document.getElementById('vNote').value.trim()
+  };
+  if (editViewingId) D.viewings = D.viewings.map(v => v.id===editViewingId ? obj : v);
+  else D.viewings.unshift(obj);
+  save(); renderAll(); closeModal('viewing');
+}
+function deleteViewing() {
+  if (!confirm('Usunąć oglądanie?')) return;
+  D.viewings = D.viewings.filter(v => v.id !== editViewingId);
+  save(); renderAll(); closeModal('viewing');
+}
+
+// ── SAVE COMMISSION ──
+function saveCommission() {
+  const desc = document.getElementById('commDesc').value.trim();
+  const amt  = parseFloat(document.getElementById('commAmt').value);
+  if (!desc || !amt) { flash(desc?'commAmt':'commDesc'); return; }
+  const obj = {
+    id: editCommissionId || uid(), desc, amount: amt,
+    date:   document.getElementById('commDate').value,
+    status: getChip('commStatusChips'),
+    note:   document.getElementById('commNote').value.trim()
+  };
+  if (editCommissionId) D.commissions = D.commissions.map(c => c.id===editCommissionId ? obj : c);
+  else D.commissions.unshift(obj);
+  save(); renderAll(); closeModal('commission');
+}
+function deleteCommission() {
+  if (!confirm('Usunąć prowizję?')) return;
+  D.commissions = D.commissions.filter(c => c.id !== editCommissionId);
+  save(); renderAll(); closeModal('commission');
+}
+
+function flash(id) {
+  const el = document.getElementById(id);
+  el.style.borderColor='var(--red)';
+  setTimeout(function(){ el.style.borderColor=''; }, 700);
+}
+
+// ── CLIENT FILTER ──
+function setClientFilter(el, filter) {
+  clientFilter = filter;
+  document.querySelectorAll('#clientFilters .chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  renderClients();
+}
+
+// ── RENDER CLIENTS ──
+function renderClients() {
+  const query = (document.getElementById('clientSearch') ? document.getElementById('clientSearch').value : '').toLowerCase();
+  const list = D.clients.filter(function(c) {
+    if (query && !c.name.toLowerCase().includes(query) && !(c.note||'').toLowerCase().includes(query)) return false;
+    if (clientFilter==='owner')  return c.type==='Właściciel';
+    if (clientFilter==='tenant') return c.type==='Najemca';
+    if (clientFilter==='active') return c.status==='Aktywny';
+    return true;
+  });
+  const el = document.getElementById('clientList');
+  if (!list.length) { el.innerHTML='<div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Brak klientów</div></div>'; return; }
+  el.innerHTML = list.map(function(c) {
+    const initials = c.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase();
+    const isOwner = c.type==='Właściciel';
+    const statusBadge = {Aktywny:'active-badge','W trakcie':'pending-badge',Nieaktywny:'done-badge'}[c.status]||'done-badge';
+    return '<div class="card client-card" onclick="openModal(\'client\',\''+c.id+'\')"><div class="client-row">'
+      +'<div class="client-avatar '+(isOwner?'owner':'tenant')+'">'+initials+'</div>'
+      +'<div class="client-info"><div class="client-name">'+c.name+'</div>'
+      +'<div class="client-sub">'+(c.phone||'')+(c.phone&&c.note?' · ':'')+(c.note||'')+'</div></div>'
+      +'<div class="client-meta"><span class="badge '+(isOwner?'owner-badge':'tenant-badge')+'">'+(c.type||'Najemca')+'</span>'
+      +'<div style="margin-top:5px"><span class="badge '+statusBadge+'">'+(c.status||'Aktywny')+'</span></div>'
+      +(c.budget?'<div class="client-meta-lbl" style="margin-top:5px">'+fmt(c.budget)+' zł/mies</div>':'')
+      +'</div></div></div>';
+  }).join('');
+}
+
+// ── GOOGLE CALENDAR ──
+function gcalUrl(v, clientName) {
+  const parts = v.date.split('-');
+  const y=parts[0], m=parts[1], d=parts[2];
+  const timeParts = (v.time||'10:00').split(':');
+  const hh=timeParts[0], mm=timeParts[1];
+  const start = y+m+d+'T'+hh+mm+'00';
+  const endH  = String(parseInt(hh)+1).padStart(2,'0');
+  const end   = y+m+d+'T'+endH+mm+'00';
+  const title = encodeURIComponent('🏠 Oglądanie — '+v.addr);
+  const details = encodeURIComponent([clientName?'Klient: '+clientName:'', v.rent?'Czynsz: '+fmt(v.rent)+' zł/mies':'', v.note||''].filter(Boolean).join('\n'));
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+title+'&dates='+start+'/'+end+'&details='+details+'&location='+encodeURIComponent(v.addr);
+}
+
+// ── RENDER VIEWINGS ──
+function renderViewingMonths() {
+  const months = {};
+  D.viewings.forEach(function(v){ months[v.date.slice(0,7)]=1; });
+  for (var i=-2; i<=3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth()+i, 1);
+    const k = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    months[k]=1;
+  }
+  const sorted = Object.keys(months).sort();
+  document.getElementById('viewingMonths').innerHTML = sorted.map(function(mo) {
+    const parts = mo.split('-');
+    return '<div class="month-chip '+(mo===viewingMonth?'active':'')+'" onclick="setViewingMonth(\''+mo+'\',this)">'+SHORT_MONTHS[parseInt(parts[1])-1]+' '+parts[0]+'</div>';
+  }).join('');
+  renderViewings();
+}
+function setViewingMonth(m, el) {
+  viewingMonth = m;
+  document.querySelectorAll('#viewingMonths .month-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  renderViewings();
+}
+function renderViewings() {
+  const list = D.viewings.filter(v => v.date.startsWith(viewingMonth)).sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+  const el = document.getElementById('viewingList');
+  if (!list.length) { el.innerHTML='<div class="empty"><div class="empty-icon">🗓</div><div class="empty-text">Brak oglądań w tym miesiącu</div></div>'; return; }
+  const statusMap = {'Zaplanowane':'pending-badge','Odbyło się':'active-badge','Odwołane':'done-badge'};
+  el.innerHTML = list.map(function(v) {
+    const d = new Date(v.date);
+    const client = D.clients.find(c => c.id===v.clientId);
+    const gcal = gcalUrl(v, client ? client.name : '');
+    const gcalSvg = '<svg width="14" height="14" viewBox="0 0 48 48" fill="none"><rect x="6" y="6" width="36" height="36" rx="4" fill="#fff" stroke="#E2DDD8" stroke-width="2"/><rect x="6" y="14" width="36" height="4" fill="#4285F4"/><rect x="14" y="6" width="4" height="8" rx="2" fill="#4285F4"/><rect x="30" y="6" width="4" height="8" rx="2" fill="#4285F4"/><rect x="12" y="24" width="8" height="6" rx="1" fill="#34A853"/><rect x="22" y="24" width="8" height="6" rx="1" fill="#FBBC04"/><rect x="12" y="32" width="8" height="6" rx="1" fill="#EA4335"/><rect x="22" y="32" width="8" height="6" rx="1" fill="#4285F4"/></svg>';
+    return '<div class="card" onclick="openModal(\'viewing\',\''+v.id+'\')">'
+      +'<div class="viewing-date-strip">'
+      +'<div class="date-box"><div class="date-box-day">'+d.getDate()+'</div><div class="date-box-mon">'+SHORT_MONTHS[d.getMonth()]+'</div></div>'
+      +'<div><div class="viewing-time">'+(v.time||'')+'</div><div class="viewing-addr">'+v.addr+'</div></div></div>'
+      +'<div class="viewing-footer"><div class="viewing-client">👤 '+(client?client.name:'—')+'</div>'
+      +'<div style="display:flex;gap:8px;align-items:center">'
+      +(v.rent?'<span style="font-family:\'Syne\',sans-serif;font-size:13px;font-weight:700;color:var(--text)">'+fmt(v.rent)+' zł</span>':'')
+      +'<span class="badge '+(statusMap[v.status]||'pending-badge')+'">'+(v.status||'Zaplanowane')+'</span>'
+      +'</div></div>'
+      +'<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">'
+      +(v.note?'<div style="font-size:12px;color:var(--text-2);flex:1">'+v.note+'</div>':'<div></div>')
+      +'<a class="btn-gcal" href="'+gcal+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+gcalSvg+' Dodaj do kalendarza</a>'
+      +'</div></div>';
+  }).join('');
+}
+
+// ── RENDER FINANCE ──
+function renderFinanceMonths() {
+  const months = {};
+  D.commissions.forEach(function(c){ months[c.date.slice(0,7)]=1; });
+  for (var i=-3; i<=1; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth()+i, 1);
+    const k = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    months[k]=1;
+  }
+  const sorted = Object.keys(months).sort().reverse();
+  document.getElementById('financeMonths').innerHTML = sorted.map(function(mo) {
+    const parts = mo.split('-');
+    return '<div class="month-chip '+(mo===financeMonth?'active':'')+'" onclick="setFinanceMonth(\''+mo+'\',this)">'+SHORT_MONTHS[parseInt(parts[1])-1]+' '+parts[0]+'</div>';
+  }).join('');
+  renderFinance();
+}
+function setFinanceMonth(m, el) {
+  financeMonth = m;
+  document.querySelectorAll('#financeMonths .month-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  renderFinance();
+}
+function renderFinance() {
+  const thisMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const thisYear  = String(now.getFullYear());
+  const mTotal = D.commissions.filter(c=>c.date.startsWith(thisMonth)&&c.status==='Wypłacona').reduce((s,c)=>s+c.amount,0);
+  const yTotal = D.commissions.filter(c=>c.date.startsWith(thisYear)&&c.status==='Wypłacona').reduce((s,c)=>s+c.amount,0);
+  const pTotal = D.commissions.filter(c=>c.status==='Oczekuje').reduce((s,c)=>s+c.amount,0);
+  const allPaid = D.commissions.filter(c=>c.status==='Wypłacona');
+  const avg = allPaid.length ? allPaid.reduce((s,c)=>s+c.amount,0)/allPaid.length : 0;
+  document.getElementById('fMonthTotal').textContent   = fmt(mTotal)+' zł';
+  document.getElementById('fYearTotal').textContent    = fmt(yTotal)+' zł';
+  document.getElementById('fPendingTotal').textContent = fmt(pTotal)+' zł';
+  document.getElementById('fAvgComm').textContent      = fmt(avg)+' zł';
+  const list = D.commissions.filter(c=>c.date.startsWith(financeMonth)).sort((a,b)=>b.date.localeCompare(a.date));
+  const el = document.getElementById('commissionList');
+  if (!list.length) { el.innerHTML='<div style="padding:20px 0;text-align:center;color:var(--text-3);font-size:13px">Brak prowizji w tym miesiącu</div>'; return; }
+  el.innerHTML = list.map(function(c) {
+    const d = new Date(c.date);
+    const dateStr = d.getDate()+' '+SHORT_MONTHS[d.getMonth()]+' '+d.getFullYear();
+    return '<div class="commission-row" onclick="openModal(\'commission\',\''+c.id+'\')" style="cursor:pointer">'
+      +'<div class="comm-left"><div class="comm-name">'+c.desc+'</div>'
+      +'<div class="comm-date">'+dateStr+(c.note?' · '+c.note:'')+'</div></div>'
+      +'<div class="comm-right"><div class="comm-amt '+(c.status==='Oczekuje'?'pending':'')+'">'+fmt(c.amount)+' zł</div>'
+      +'<div class="comm-status">'+c.status+'</div></div></div>';
+  }).join('');
+}
+
+// ── RENDER DASHBOARD ──
+function renderDash() {
+  const thisMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const todayStr  = now.toISOString().slice(0,10);
+  const activeClients = D.clients.filter(c=>c.status==='Aktywny').length;
+  const monthViewings = D.viewings.filter(v=>v.date.startsWith(thisMonth)).length;
+  const monthComm  = D.commissions.filter(c=>c.date.startsWith(thisMonth)&&c.status==='Wypłacona').reduce((s,c)=>s+c.amount,0);
+  const pendingComm= D.commissions.filter(c=>c.status==='Oczekuje').reduce((s,c)=>s+c.amount,0);
+  document.getElementById('dClients').textContent    = activeClients;
+  document.getElementById('dViewings').textContent   = monthViewings;
+  document.getElementById('dCommission').textContent = fmt(monthComm)+' zł';
+  document.getElementById('dPending').textContent    = fmt(pendingComm)+' zł';
+  document.getElementById('topViewings').textContent = D.viewings.filter(v=>v.date===todayStr&&v.status==='Zaplanowane').length;
+  document.getElementById('topCommission').textContent = fmt(monthComm)+' zł';
+  if (D.goal > 0) {
+    const pct = Math.min(100, (monthComm/D.goal)*100);
+    document.getElementById('goalProgressLabel').textContent = fmt(monthComm)+' / '+fmt(D.goal)+' zł';
+    document.getElementById('goalPct').textContent = pct.toFixed(0)+'%';
+    document.getElementById('goalBar').style.width = pct+'%';
+    if (!document.getElementById('goalInput').value) document.getElementById('goalInput').placeholder = 'Cel: '+fmt(D.goal)+' zł';
+  }
+  const todayV = D.viewings.filter(v=>v.date===todayStr).sort((a,b)=>a.time.localeCompare(b.time));
+  const todayEl = document.getElementById('todayViewings');
+  if (!todayV.length) { todayEl.innerHTML='<p class="today-empty">Brak oglądań na dziś 🎉</p>'; }
+  else {
+    const gcalSvg = '<svg width="12" height="12" viewBox="0 0 48 48" fill="none"><rect x="6" y="6" width="36" height="36" rx="4" fill="#fff" stroke="#E2DDD8" stroke-width="2"/><rect x="6" y="14" width="36" height="4" fill="#4285F4"/><rect x="14" y="6" width="4" height="8" rx="2" fill="#4285F4"/><rect x="30" y="6" width="4" height="8" rx="2" fill="#4285F4"/><rect x="12" y="24" width="8" height="6" rx="1" fill="#34A853"/><rect x="22" y="24" width="8" height="6" rx="1" fill="#FBBC04"/><rect x="12" y="32" width="8" height="6" rx="1" fill="#EA4335"/><rect x="22" y="32" width="8" height="6" rx="1" fill="#4285F4"/></svg>';
+    todayEl.innerHTML = todayV.map(function(v) {
+      const client = D.clients.find(c=>c.id===v.clientId);
+      const gcal = gcalUrl(v, client ? client.name : '');
+      return '<div class="today-viewing-row" onclick="openModal(\'viewing\',\''+v.id+'\')" style="cursor:pointer">'
+        +'<div class="tvr-time">'+v.time+'</div>'
+        +'<div style="flex:1"><div class="tvr-addr">'+v.addr+'</div><div class="tvr-client">'+(client?client.name:'—')+'</div></div>'
+        +'<a class="btn-gcal" href="'+gcal+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:11px;padding:5px 9px">'+gcalSvg+' GCal</a>'
+        +'</div>';
+    }).join('');
+  }
+  const recent = D.clients.slice(0,3);
+  const recEl = document.getElementById('recentClients');
+  if (!recent.length) { recEl.innerHTML='<div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Brak klientów</div></div>'; return; }
+  recEl.innerHTML = recent.map(function(c) {
+    const initials = c.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase();
+    const isOwner = c.type==='Właściciel';
+    return '<div class="card client-card" onclick="openModal(\'client\',\''+c.id+'\')">'
+      +'<div class="client-row"><div class="client-avatar '+(isOwner?'owner':'tenant')+'">'+initials+'</div>'
+      +'<div class="client-info"><div class="client-name">'+c.name+'</div>'
+      +'<div class="client-sub">'+(c.phone||'')+(c.phone&&c.note?' · ':'')+(c.note||'')+'</div></div>'
+      +'<div class="client-meta"><span class="badge '+(isOwner?'owner-badge':'tenant-badge')+'">'+(c.type||'Najemca')+'</span>'
+      +(c.budget?'<div class="client-meta-lbl" style="margin-top:4px">'+fmt(c.budget)+' zł/mies</div>':'')
+      +'</div></div></div>';
+  }).join('');
+}
+
+function setGoal() {
+  const v = parseFloat(document.getElementById('goalInput').value);
+  if (!v || v<=0) return;
+  D.goal = v;
+  document.getElementById('goalInput').value = '';
+  document.getElementById('goalInput').placeholder = 'Cel: '+fmt(v)+' zł';
+  save(); renderAll();
+}
+
+// ── RENDER ALL ──
+function renderAll() {
+  renderDash();
+  renderClients();
+  if (document.getElementById('page-viewings').classList.contains('active')) renderViewingMonths();
+  if (document.getElementById('page-finance').classList.contains('active'))  renderFinanceMonths();
+}
+
+// ── CLOSE MODAL ON OVERLAY CLICK ──
+document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) {
+      overlay.classList.remove('open');
+      editClientId = editViewingId = editCommissionId = null;
+    }
+  });
+});
+
+// ── INIT ──
+setTopDate();
+renderViewingMonths();
+renderFinanceMonths();
+startSync();
+
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  });
+}
+</script>
+</body>
+</html>
 
 const firebaseConfig = {
   apiKey: "AIzaSyDKKWWTDHMTDBedPur2KEkEVm6Xwm-7hoA",
