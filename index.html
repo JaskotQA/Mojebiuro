@@ -1214,7 +1214,28 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 setTopDate();
 renderViewingMonths();
 renderFinanceMonths();
-startSync(); // loads data from Firebase and keeps in sync
+startSync();
+
+// ── EXPOSE TO WINDOW (required for onclick in HTML with type=module) ──
+window.goPage          = goPage;
+window.openModal       = openModal;
+window.closeModal      = closeModal;
+window.selChip         = selChip;
+window.saveClient      = saveClient;
+window.deleteClient    = deleteClient;
+window.saveViewing     = saveViewing;
+window.deleteViewing   = deleteViewing;
+window.saveCommission  = saveCommission;
+window.deleteCommission= deleteCommission;
+window.setClientFilter = setClientFilter;
+window.setViewingMonth = setViewingMonth;
+window.setFinanceMonth = setFinanceMonth;
+window.setGoal         = setGoal;
+window.renderClients   = renderClients;
+window.selInv          = selInv;
+window.selSide         = selSide;
+window.selSave         = selSave;
+window.gcalUrl         = gcalUrl;
 
 </script>
 <script>
